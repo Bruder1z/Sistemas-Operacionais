@@ -1,0 +1,214 @@
+#include "dos.h"
+ 
+/****************************************************************
+* Constantes e Variáveis Globais da Rotina ESCALONADOR
+****************************************************************/
+ 
+#define LIMITE_CIC_ESC 10
+#define TAM_PILHA 1000
+ 
+int global_ponteiroEscalonador; /* Índice que determina a posição do ponteiro do escalonador */
+int global_nrot; /* Número de rotinas registradas */
+ 
+struct {
+    unsigned int pilha[TAM_PILHA]; /* Pilha de cada rotina */
+    unsigned int reg_sp; /* Topo da pilha da rotina */
+    unsigned int reg_ss; /* Segmento da pilha da rotina que será na área de dados (DS) */
+} global_var_escalonador[LIMITE_CIC_ESC];
+ 
+void interrupt (*global_intOriginal)(); /* Variável para armazenamento do antigo endereço da rotina de interrupção do relógio do PC */
+ 
+/* Variáveis globais */
+unsigned long t, g, aux; // Variáveis agora globais
+ 
+/****************************************************************
+* API com funções de uso geral
+****************************************************************/
+void print(int c, int l, char *string) {
+    int i;
+    char far *vid = (char far *)0xb8000000;
+ 
+    for (i = 0; string[i]; i++)
+        *(vid + i * 2 + c * 2 + l * 160) = string[i];
+}
+ 
+char *b_ltoa(unsigned long numero, char *string) {
+    for (t = 0; numero > 0; t++) {
+        string[t] = numero % 10 + 0x30;
+        numero = numero / 10;
+    }
+    string[t] = 0;
+ 
+    for (g = 0; g < t / 2; g++) {
+        aux = string[g];
+        string[g] = string[t - g - 1];
+        string[t - g - 1] = aux;
+    }
+ 
+    return string;
+}
+ 
+void limpa_tela() {
+    int c, l;
+ 
+    for (c = 0; c < 80; c++)
+        for (l = 0; l < 25; l++)
+            print(c, l, " ");
+}
+ 
+/****************************************************************
+* Rotinas de gerenciamento da multitarefa
+****************************************************************/
+void registra_rotina(void (*rot)()) {
+    int sp_main, ss_main;
+ 
+    global_nrot++; // Incremento o número de rotinas cadastradas
+ 
+    // Salvo endereço da pilha original
+    sp_main = _SP;
+    ss_main = _SS;
+ 
+    // Defino endereço da pilha da nova rotina
+    _SS = _DS;
+    _SP = (int)(global_var_escalonador[global_nrot].pilha) + TAM_PILHA * 2;
+ 
+    // Carrego valores iniciais na pilha da nova rotina
+    asm pushf; // Carrego flags
+    _SI = FP_SEG((void far *)rot);
+    asm push SI; // Carrego CS da rotina
+    _SI = FP_OFF((void far *)rot);
+    asm push SI; // Carrego IP da rotina
+    asm push AX; // Carrego AX
+    asm push BX; // Carrego BX
+    asm push CX; // Carrego CX
+    asm push DX; // Carrego DX
+    asm push ES; // Carrego ES
+    asm push DS; // Carrego DS
+    asm push SI; // Carrego SI
+    asm push DI; // Carrego DI
+    asm push BP; // Carrego BP
+ 
+    // Salvo topo da pilha da nova rotina
+    global_var_escalonador[global_nrot].reg_sp = _SP;
+ 
+    // Salvo segmento da pilha da nova rotina
+    global_var_escalonador[global_nrot].reg_ss = _SS;
+ 
+    _SP = sp_main;
+    _SS = ss_main;
+}
+ 
+void interrupt escalonador(void) {
+    int atual;
+    int prox;  
+ 
+    atual = global_ponteiroEscalonador;
+ 
+    global_ponteiroEscalonador++;
+ 
+    if (global_ponteiroEscalonador > global_nrot)
+        global_ponteiroEscalonador = 0;
+ 
+    prox = global_ponteiroEscalonador;
+ 
+    /* Invertendo posição da pilha */
+    global_var_escalonador[atual].reg_sp = _SP;
+    global_var_escalonador[atual].reg_ss = _SS;
+ 
+    _SS = global_var_escalonador[prox].reg_ss;
+    _SP = global_var_escalonador[prox].reg_sp;
+ 
+    outportb(0x20, 0x20);
+}
+ 
+void inicializa_multitarefa(void) {
+    global_intOriginal = getvect(8);
+    setvect(8, escalonador);
+}
+ 
+void finaliza_multitarefa(void) {
+    setvect(8, global_intOriginal);
+}
+ 
+/****************************************************************
+* Rotinas para execução em multitarefa
+****************************************************************/
+ 
+void contador1() {
+    long int c = 0;
+    char strCont[50];
+ 
+    while (1) {
+        c++;
+        if (c > 5000000) c = 0;
+ 
+        b_ltoa(c, strCont);
+        print(10, 10, strCont);
+    }
+}
+ 
+void contador2() {
+    long int c = 0;
+    char strCont[50];
+ 
+    while (1) {
+        c++;
+        if (c > 5000000) c = 0;
+ 
+        b_ltoa(c, strCont);
+        print(10, 12, strCont); 
+    }
+}
+ 
+void contador3() {
+    long int c = 0;
+    char strCont[50];
+ 
+    while (1) {
+        c++;
+        if (c > 5000000) c = 0;
+ 
+        b_ltoa(c, strCont);
+        print(10, 14, strCont); 
+    }
+}
+ 
+/****************************************************************
+* ROTINA:	main()
+* OBJETIVO:	Preparar e iniciar o processo de multitarefa
+*		Finalizar a execução do programa
+*
+* PARAM:	nenhum
+****************************************************************/
+ 
+void main() {
+    char ch = 0;
+ 
+    clrscr();
+ 
+    global_ponteiroEscalonador = 0;
+    global_nrot = 0;
+ 
+    registra_rotina(contador1);
+    registra_rotina(contador2);
+    registra_rotina(contador3);
+ 
+    limpa_tela();
+    // Exibindo nomes e RAs
+    print(10, 8, "Lucas Bruder - 215907"); // Nome na linha 8
+    print(10, 9, "Guilherme Siqueira - 227421"); // Adicione outros nomes e RAs aqui, se necessário
+    print(0, 10, "Contador 1:");   // Nome do contador 1 na linha 10
+    print(0, 12, "Contador 2:");   // Nome do contador 2 na linha 12
+    print(0, 14, "Contador 3:");   // Nome do contador 3 na linha 14
+ 
+    inicializa_multitarefa();
+ 
+    while (ch != '@') {
+        ch = 0;
+ 
+        if (kbhit())
+            ch = getch();
+    }
+ 
+    finaliza_multitarefa();
+}
